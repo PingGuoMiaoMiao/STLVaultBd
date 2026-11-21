@@ -14,9 +14,13 @@ model User {
   email           String   @unique
   phone           String?
   password        String
+  avatar          String?
   emailVerifiedAt DateTime? @map("email_verified_at")
   createdAt       DateTime  @default(now()) @map("created_at")
   likes           ModelLike[]
+  comments        Comment[]
+  models          Model[]
+  favorites       Favorite[]
 
   @@map("users")
 }
@@ -41,12 +45,33 @@ model Model {
   title       String
   description String
   category    String
+  tags        String?
   image       String?
   modelUrl    String?
+  userId      Int?        @map("user_id")
   createdAt   DateTime    @default(now()) @map("created_at")
   likes       ModelLike[]
+  comments    Comment[]
+  favorites   Favorite[]
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([userId])
   @@map("models")
+}
+
+// 模型评论：登录用户才能发，按时间倒序展示
+model Comment {
+  id        Int      @id @default(autoincrement())
+  content   String
+  userId    Int      @map("user_id")
+  modelId   Int      @map("model_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  model Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@index([modelId])
+  @@map("comments")
 }
 
 model ModelLike {
@@ -59,4 +84,18 @@ model ModelLike {
 
   @@id([userId, modelId])
   @@map("model_likes")
+}
+
+// 收藏：和点赞分开，语义是「我以后要下载」
+model Favorite {
+  userId    Int      @map("user_id")
+  modelId   Int      @map("model_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  model Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@id([userId, modelId])
+  @@index([modelId])
+  @@map("favorites")
 }

@@ -8,11 +8,16 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import bcrypt from 'bcryptjs';
+import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { UPLOAD_ROOT } from '../models/upload.config.js';
 import { VerificationService } from '../verification/verification.service.js';
+import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { LoginDto } from './dto/login.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
+import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { VerifyEmailDto } from './dto/verify-email.dto.js';
 
 // 对外返回的用户字段白名单：永远不含 password
@@ -21,6 +26,7 @@ const USER_SELECT = {
   username: true,
   nickname: true,
   email: true,
+  avatar: true,
 } as const;
 
 type PublicUser = {
@@ -28,6 +34,7 @@ type PublicUser = {
   username: string;
   nickname: string;
   email: string;
+  avatar: string | null;
 };
 
 function pick(user: PublicUser): PublicUser {
@@ -36,6 +43,7 @@ function pick(user: PublicUser): PublicUser {
     username: user.username,
     nickname: user.nickname,
     email: user.email,
+    avatar: user.avatar,
   };
 }
 
@@ -182,5 +190,80 @@ export class AuthService {
     });
 
     return { ok: true };
+  }
+
+  /** 个人中心：基本资料 + 投稿/获赞/评论统计 */
+  async getProfile(userId: number) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { ...USER_SELECT, createdAt: true },
+    });
+    if (!user) throw new NotFoundException('账号不存在');
+
+    const [uploads, likes, comments] = await Promise.all([
+      this.prisma.model.count({ where: { userId } }),
+      this.prisma.modelLike.count({ where: { model: { userId } } }),
+      this.prisma.comment.count({ where: { userId } }),
+    ]);
+
+    return { ...user, stats: { uploads, likes, comments } };
+  }
+
+  /** 修改昵称 */
+  updateProfile(userId: number, dto: UpdateProfileDto) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: dto.nickname ? { nickname: dto.nickname.trim() } : {},
+      select: USER_SELECT,
+    });
+  }
+
+  /** 换头像：写新路径，顺手删掉旧文件 */
+  async updateAvatar(userId: number, avatarUrl: string) {
+    const before = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { avatar: true },
+    });
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { avatar: avatarUrl },
+      select: USER_SELECT,
+    });
+
+    if (before?.avatar && before.avatar !== avatarUrl) {
+      await this.removeUpload(before.avatar);
+    }
+
+    return user;
+  }
+
+  /** 修改密码：需要验证当前密码 */
+  async changePassword(userId: number, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+    if (!user) throw new NotFoundException('账号不存在');
+
+    const ok = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!ok) throw new BadRequestException('当前密码不正确');
+
+    const password = await bcrypt.hash(dto.newPassword, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password },
+    });
+
+    return { ok: true };
+  }
+
+  /** 只处理 /uploads/ 下的文件 */
+  private async removeUpload(url?: string | null) {
+    if (!url || !url.startsWith('/uploads/')) return;
+
+    const relative = url.slice('/uploads/'.length);
+    if (relative.includes('..')) return;
+
+    await rm(join(UPLOAD_ROOT, relative), { force: true });
   }
 }

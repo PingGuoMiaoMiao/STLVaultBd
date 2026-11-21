@@ -11,3 +11,6 @@ generated/
 .agents/
 .claude/skills/
 .windsurf/skills/
+
+# 用户上传的模型和封面，不入库
+uploads/
